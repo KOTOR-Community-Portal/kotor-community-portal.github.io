@@ -1,0 +1,131 @@
+name: Deploy
+
+on:
+  workflow_dispatch:
+    inputs:
+      cleanup:
+        type: boolean
+        default: false
+        required: true
+
+concurrency:
+  group: deploy
+  cancel-in-progress: true
+
+jobs:
+  build:
+    runs-on: ubuntu-latest
+    
+    outputs:
+      archive: ${{ steps.upload_artifact.outputs.artifact-url }}
+    
+    steps:
+      - name: Checkout - website
+        uses: actions/checkout@v6
+        with:
+          repository: KOTOR-Community-Portal/website
+          path: website
+          ref: main
+      
+      - name: Checkout - website-content
+        uses: actions/checkout@v6
+        with:
+          repository: KOTOR-Community-Portal/website-content
+          path: website-content
+          ref: main
+      
+      - name: Checkout - mod-builds
+        uses: actions/checkout@v6
+        with:
+          repository: KOTOR-Community-Portal/mod-builds
+          path: mod-builds
+          ref: main
+      
+      - name: Checkout - news
+        uses: actions/checkout@v6
+        with:
+          repository: KOTOR-Community-Portal/news
+          path: news
+          ref: main
+      
+      # Checkout any additional repositories containing content
+      
+      - name: Checkout - static-html-generator
+        uses: actions/checkout@v6
+        with:
+          repository: KOTOR-Community-Portal/static-html-generator
+          path: static-html-generator
+          ref: main
+      
+      - name: Setup - .NET
+        uses: actions/setup-dotnet@v5
+        with:
+          dotnet-version: '8.0.x'
+      
+      - name: Build Generator
+        run: |
+          cd static-html-generator/src
+          dotnet build --configuration Release
+          cd ..
+          cd ..
+      
+      - name: Run Generator
+        run: |
+          cd website
+          dotnet ../static-html-generator/src/bin/Release/net8.0/StaticHtmlGenerator.dll
+          cd ..
+          
+      - name: Upload Artifact
+        id: upload_artifact
+        uses: actions/upload-artifact@v7
+        with:
+          name: kotor-community-portal
+          path: website/dist/
+      
+      - name: Upload Pages Artifact
+        uses: actions/upload-pages-artifact@v3
+        with:
+          path: website/dist/
+
+  deploy_neocities:
+    runs-on: ubuntu-latest  
+    needs: build
+    
+    steps:
+      - name: Handle Input
+        id: input
+        run: |
+          cleanup=${{ github.event.inputs.cleanup || 'false' }}
+          echo "cleanup=$cleanup" >> "$GITHUB_OUTPUT"
+      
+      - name: Download Artifact
+        uses: actions/download-artifact@v8
+        with:
+          name: kotor-community-portal
+          path: dist
+          
+      - name: Deploy to Neocities
+        uses: bcomnes/deploy-to-neocities@v3
+        with:
+          api_key: ${{ secrets.NEOCITIES_API_KEY }}
+          cleanup: ${{ steps.input.outputs.cleanup }}
+          neocities_supporter: false
+          preview_before_deploy: true
+          dist_dir: dist
+  
+  deploy_github_pages:
+    permissions:
+      pages: write
+      id-token: write
+    
+    environment:
+      name: github-pages
+      url: ${{ steps.deploy_github_pages.outputs.page_url }}
+
+    runs-on: ubuntu-latest
+    needs: build
+    
+    steps:
+      - name: Deploy to GitHub Pages
+        id: deploy_github_pages
+        uses: actions/deploy-pages@v4
